@@ -1,38 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>AI Interviewer</title>
-  <!-- Preload Daily.co SDK immediately in head so it's ready -->
-  <script src="https://unpkg.com/@daily-co/daily-js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: 'Segoe UI', sans-serif;
-      background: #0f0f1a;
-      color: #fff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      background: #0f0f1a; color: #fff;
+      display: flex; align-items: center; justify-content: center;
       min-height: 100vh;
     }
     .card {
-      background: #1a1a2e;
-      border: 1px solid #2a2a4a;
-      border-radius: 20px;
-      padding: 48px 40px;
-      max-width: 480px;
-      width: 90%;
-      text-align: center;
+      background: #1a1a2e; border: 1px solid #2a2a4a;
+      border-radius: 20px; padding: 48px 40px;
+      max-width: 480px; width: 90%; text-align: center;
     }
     .avatar {
-      width: 90px; height: 90px;
-      border-radius: 50%;
+      width: 90px; height: 90px; border-radius: 50%;
       background: linear-gradient(135deg, #667eea, #764ba2);
       display: flex; align-items: center; justify-content: center;
-      font-size: 40px;
-      margin: 0 auto 24px;
+      font-size: 40px; margin: 0 auto 24px;
     }
     .avatar.speaking { animation: speakpulse 0.6s infinite alternate; }
     @keyframes speakpulse {
@@ -50,14 +39,15 @@
   <div class="avatar" id="avatar">🤖</div>
   <h1>AI Interviewer</h1>
   <p class="subtitle">Powered by VAPI</p>
-  <div id="status">Starting interview session...</div>
+  <div id="status">Starting interview...</div>
   <div id="error"></div>
 </div>
 
 <script>
+  // ─── Config ────────────────────────────────────────────────────────────────
   const params       = new URLSearchParams(window.location.search);
   const ASSISTANT_ID = params.get('assistantId') || '75025e90-f9f7-4e16-9c0f-25b4735129a8';
-  const VAPI_KEY     = params.get('key')          || 'cdf573da-6f12-4ee9-b100-3d817f76c8c4';
+  const VAPI_KEY     = params.get('key')          || 'cdf573da-6f12-4ee9-b100-3d817f76c8c4'; // ← replace
   const NAME         = params.get('name')         || 'Candidate';
   const ROLE         = params.get('role')          || 'the position';
 
@@ -65,9 +55,25 @@
   const errorEl  = document.getElementById('error');
   const avatar   = document.getElementById('avatar');
 
+  // ─── Key insight: Recall captures audio from the page's AudioContext ────────
+  // We must use getUserMedia (mic = meeting audio) + play TTS through AudioContext
+  // so Recall streams it back into the meeting.
+
+  let audioContext;
+  let vapiCallId;
+  let pollInterval;
+
   async function startInterview() {
     try {
-      statusEl.textContent = 'Creating voice session...';
+      // Step 1: Get microphone (Recall sends meeting audio here)
+      statusEl.textContent = '🎤 Accessing meeting audio...';
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(audioContext.destination); // loopback so VAPI hears it
+
+      // Step 2: Create VAPI web call
+      statusEl.textContent = '🔗 Connecting to AI interviewer...';
       const res = await fetch('https://api.vapi.ai/call/web', {
         method: 'POST',
         headers: {
@@ -77,43 +83,50 @@
         body: JSON.stringify({
           assistantId: ASSISTANT_ID,
           assistantOverrides: {
-            firstMessage: 'Hello ' + NAME + '! I am your AI interviewer. We will discuss your experience for the ' + ROLE + ' role. Are you ready?',
+            firstMessage: 'Hello ' + NAME + '! I am your AI interviewer. We will discuss your experience for the ' + ROLE + ' role. Are you ready to begin?',
             variableValues: { candidateName: NAME, jobRole: ROLE }
           }
         })
       });
 
       const data = await res.json();
-      console.log('VAPI response:', data);
       if (!res.ok) throw new Error(data.message || JSON.stringify(data));
+      vapiCallId = data.id;
 
-      statusEl.textContent = 'Connecting to audio...';
+      // Step 3: Join Daily.co room — audio plays through page = Recall captures it
+      statusEl.textContent = '🎙️ Joining voice session...';
+      const roomUrl = data.webCallUrl;
 
-      const call = window.DailyIframe.createCallObject({
-        audioSource: true,
-        videoSource: false
-      });
+      // Create hidden iframe to join Daily room
+      // Daily.co audio output goes through browser audio = Recall captures it
+      const iframe = document.createElement('iframe');
+      iframe.src = roomUrl + '?prejoinPage=skip&showLeaveButton=false&showFullscreenButton=false';
+      iframe.allow = 'microphone; camera; autoplay; display-capture';
+      iframe.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;opacity:0;border:none;z-index:-1;';
+      document.body.appendChild(iframe);
 
-      call.on('joined-meeting', () => {
-        statusEl.textContent = 'Connected — AI interviewer is ready';
-        avatar.classList.add('speaking');
-      });
+      statusEl.textContent = '✅ AI Interviewer is active — interview in progress';
+      avatar.classList.add('speaking');
 
-      call.on('left-meeting', () => {
-        statusEl.textContent = 'Interview complete. Thank you!';
-        avatar.classList.remove('speaking');
-      });
-
-      call.on('error', (e) => {
-        errorEl.textContent = 'Audio error: ' + e.errorMsg;
-      });
-
-      await call.join({ url: data.webCallUrl });
+      // Poll VAPI call status
+      pollInterval = setInterval(async () => {
+        try {
+          const r = await fetch('https://api.vapi.ai/call/' + vapiCallId, {
+            headers: { 'Authorization': 'Bearer ' + VAPI_KEY }
+          });
+          const d = await r.json();
+          if (d.status === 'ended') {
+            clearInterval(pollInterval);
+            statusEl.textContent = '✅ Interview complete. Thank you!';
+            avatar.classList.remove('speaking');
+          }
+        } catch(e) {}
+      }, 5000);
 
     } catch(err) {
       console.error('Error:', err);
-      errorEl.textContent = 'Error: ' + err.message;
-      statusEl.textContent = 'Failed to start interview';
+      errorEl.textContent = '❌ ' + err.message;
+      statusEl.textContent = 'Failed to start';
     }
   }
 
