@@ -6,7 +6,6 @@
   <title>AI Interview Room</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-
     body {
       font-family: 'Segoe UI', sans-serif;
       background: #0f0f1a;
@@ -16,7 +15,6 @@
       justify-content: center;
       min-height: 100vh;
     }
-
     .card {
       background: #1a1a2e;
       border: 1px solid #2a2a4a;
@@ -25,9 +23,7 @@
       max-width: 480px;
       width: 90%;
       text-align: center;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
     }
-
     .avatar {
       width: 90px; height: 90px;
       border-radius: 50%;
@@ -35,156 +31,117 @@
       display: flex; align-items: center; justify-content: center;
       font-size: 40px;
       margin: 0 auto 24px;
+      animation: pulse 2s infinite;
     }
-
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(102,126,234,0.4); }
+      50% { box-shadow: 0 0 0 20px rgba(102,126,234,0); }
+    }
     h1 { font-size: 24px; margin-bottom: 8px; }
-    .subtitle { color: #888; font-size: 14px; margin-bottom: 32px; }
-
-    .info-box {
-      background: #0f0f1a;
-      border-radius: 12px;
-      padding: 16px 20px;
-      margin-bottom: 32px;
-      text-align: left;
-    }
-    .info-box p { font-size: 13px; color: #aaa; margin-bottom: 4px; }
-    .info-box strong { font-size: 15px; color: #fff; }
-
-    button {
-      width: 100%;
-      padding: 16px;
-      border-radius: 12px;
-      border: none;
-      font-size: 16px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-
-    #startBtn {
-      background: linear-gradient(135deg, #667eea, #764ba2);
-      color: white;
-    }
-    #startBtn:hover { opacity: 0.9; transform: translateY(-1px); }
-    #startBtn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-
+    .subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
     .status {
+      font-size: 15px;
+      color: #aaa;
       margin-top: 20px;
-      font-size: 13px;
-      color: #888;
-      min-height: 20px;
+      min-height: 24px;
     }
-
     .dot {
       display: inline-block;
       width: 8px; height: 8px;
       border-radius: 50%;
       background: #667eea;
       margin-right: 6px;
-      animation: pulse 1.5s infinite;
+      animation: blink 1.2s infinite;
     }
-    @keyframes pulse {
+    @keyframes blink {
       0%, 100% { opacity: 1; }
-      50% { opacity: 0.3; }
+      50% { opacity: 0.2; }
     }
-
-    .tips {
-      margin-top: 28px;
-      padding-top: 24px;
-      border-top: 1px solid #2a2a4a;
-      text-align: left;
-    }
-    .tips p { font-size: 12px; color: #666; margin-bottom: 6px; }
-    .tips span { color: #888; }
+    .speaking { color: #10b981; font-weight: 600; }
+    .listening { color: #667eea; font-weight: 600; }
+    .error { color: #ef4444; font-size: 13px; margin-top: 16px; }
   </style>
 </head>
 <body>
 <div class="card">
   <div class="avatar">🤖</div>
-  <h1>AI Interview Room</h1>
-  <p class="subtitle">Your interview will be conducted by an AI interviewer</p>
-
-  <div class="info-box">
-    <p>Candidate</p>
-    <strong id="candidateDisplay">Loading...</strong>
-    <p style="margin-top:12px">Role</p>
-    <strong id="roleDisplay">Loading...</strong>
+  <h1>AI Interviewer</h1>
+  <p class="subtitle">Interview session is starting...</p>
+  <div class="status" id="status">
+    <span class="dot"></span> Connecting to VAPI...
   </div>
-
-  <button id="startBtn" onclick="startInterview()">
-    🎙️ Start Interview
-  </button>
-
-  <div class="status" id="status"></div>
-
-  <div class="tips">
-    <p>📋 <span>Make sure your microphone is allowed in the browser</span></p>
-    <p>🎧 <span>Use headphones for the best experience</span></p>
-    <p>🔇 <span>Find a quiet place before starting</span></p>
-  </div>
+  <div class="error" id="error"></div>
 </div>
 
 <script>
-  // ─── Read candidate info from URL params ───────────────────────────────────
-  // n8n will send link like: https://yoursite.com?name=John&role=Engineer&key=VAPI_KEY&assistantId=xxx
-  const params = new URLSearchParams(window.location.search);
-  const candidateName = params.get('name') || 'Candidate';
-  const jobRole      = params.get('role') || 'the position';
-  const vapiKey      = params.get('key');       ||  'cdf573da-6f12-4ee9-b100-3d817f76c8c4';
-  const assistantId  = params.get('assistantId'); || '75025e90-f9f7-4e16-9c0f-25b4735129a8';
+  // ─── Config — hardcoded fallbacks so it works even without URL params ────────
+  const params      = new URLSearchParams(window.location.search);
+  const assistantId = params.get('assistantId') || '75025e90-f9f7-4e16-9c0f-25b4735129a8';
+  const vapiKey     = params.get('key')         || '0fdb05db-87c2-45e5-8b30-b538f998f928'; // ← replace this
+  const name        = params.get('name')        || 'Candidate';
+  const role        = params.get('role')        || 'the position';
 
-  document.getElementById('candidateDisplay').textContent = candidateName;
-  document.getElementById('roleDisplay').textContent = jobRole;
+  function setStatus(msg, cls) {
+    const el = document.getElementById('status');
+    el.innerHTML = msg;
+    el.className = 'status ' + (cls || '');
+  }
 
-  async function startInterview() {
-    const btn    = document.getElementById('startBtn');
-    const status = document.getElementById('status');
+  // ─── Auto-start VAPI as soon as page loads ───────────────────────────────────
+  window.addEventListener('load', () => {
+    setTimeout(initVapi, 1500); // small delay to ensure SDK loads
+  });
 
-    btn.disabled = true;
-    btn.textContent = 'Connecting...';
-    status.innerHTML = '<span class="dot"></span> Creating your interview session...';
+  function initVapi() {
+    if (typeof Vapi === 'undefined') {
+      document.getElementById('error').textContent = 'VAPI SDK failed to load. Check internet connection.';
+      return;
+    }
 
     try {
-      // Step 1: Create a fresh VAPI web call RIGHT NOW
-      const res = await fetch('https://api.vapi.ai/call/web', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${vapiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          assistantId: assistantId,
-          assistantOverrides: {
-            variableValues: {
-              candidateName: candidateName,
-              jobRole: jobRole
-            },
-            firstMessage: `Hello ${candidateName}! I'm your AI interviewer today. We'll be discussing your experience for the ${jobRole} role. Are you ready to begin?`
-          }
-        })
+      const vapi = new Vapi(vapiKey);
+
+      // ─── Auto-start call immediately ──────────────────────────────────────
+      vapi.start({
+        assistantId: assistantId,
+        assistantOverrides: {
+          firstMessage: `Hello ${name}! I am your AI interviewer today. We will be discussing your experience for the ${role} role. Are you ready to begin?`,
+          variableValues: { candidateName: name, jobRole: role }
+        }
       });
 
-      const data = await res.json();
+      // ─── Event listeners ──────────────────────────────────────────────────
+      vapi.on('call-start', () => {
+        setStatus('<span class="dot"></span> Interview started — AI is ready', 'listening');
+      });
 
-      if (!res.ok) {
-        throw new Error(data.message || 'Failed to create session');
-      }
+      vapi.on('speech-start', () => {
+        setStatus('🔊 AI Interviewer is speaking...', 'speaking');
+      });
 
-      // Step 2: Redirect to the fresh webCallUrl immediately
-      const webCallUrl = data.webCallUrl;
-      status.innerHTML = '<span class="dot"></span> Redirecting to your interview...';
+      vapi.on('speech-end', () => {
+        setStatus('<span class="dot"></span> Listening to you...', 'listening');
+      });
 
-      setTimeout(() => {
-        window.location.href = webCallUrl;
-      }, 1000);
+      vapi.on('call-end', () => {
+        setStatus('✅ Interview complete. Thank you!');
+      });
 
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = '🎙️ Start Interview';
-      status.textContent = '❌ Error: ' + err.message + '. Please try again.';
+      vapi.on('error', (e) => {
+        console.error('VAPI error:', e);
+        document.getElementById('error').textContent = 'Error: ' + (e?.message || JSON.stringify(e));
+        setStatus('❌ Connection failed');
+      });
+
+    } catch(err) {
       console.error(err);
+      document.getElementById('error').textContent = 'Failed to start: ' + err.message;
     }
   }
 </script>
+
+<!-- VAPI Web SDK -->
+<script src="https://cdn.jsdelivr.net/npm/@vapi-ai/web@latest/dist/vapi.umd.js" onload="console.log('VAPI SDK loaded')" onerror="document.getElementById('error').textContent='Failed to load VAPI SDK'"></script>
+
 </body>
 </html>
