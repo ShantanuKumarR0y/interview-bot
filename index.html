@@ -2,10 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>AI Interviewer</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    * { margin:0; padding:0; box-sizing:border-box; }
     body {
       font-family: 'Segoe UI', sans-serif;
       background: #0f0f1a; color: #fff;
@@ -22,16 +21,13 @@
       background: linear-gradient(135deg, #667eea, #764ba2);
       display: flex; align-items: center; justify-content: center;
       font-size: 40px; margin: 0 auto 24px;
+      transition: box-shadow 0.3s;
     }
-    .avatar.speaking { animation: speakpulse 0.6s infinite alternate; }
-    @keyframes speakpulse {
-      from { box-shadow: 0 0 0 0 rgba(16,185,129,0.6); }
-      to   { box-shadow: 0 0 0 24px rgba(16,185,129,0); }
-    }
+    .avatar.speaking { box-shadow: 0 0 0 12px rgba(16,185,129,0.3); }
     h1 { font-size: 24px; margin-bottom: 8px; }
     .subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
-    #status { font-size: 14px; color: #aaa; margin-top: 16px; min-height: 22px; }
-    #error  { font-size: 13px; color: #ef4444; margin-top: 12px; }
+    #status { font-size: 14px; color: #aaa; margin-top: 16px; }
+    #error { font-size: 13px; color: #ef4444; margin-top: 12px; }
   </style>
 </head>
 <body>
@@ -39,12 +35,11 @@
   <div class="avatar" id="avatar">🤖</div>
   <h1>AI Interviewer</h1>
   <p class="subtitle">Powered by VAPI</p>
-  <div id="status">Starting interview...</div>
+  <div id="status">Starting...</div>
   <div id="error"></div>
 </div>
 
 <script>
-  // ─── Config ────────────────────────────────────────────────────────────────
   const params       = new URLSearchParams(window.location.search);
   const ASSISTANT_ID = params.get('assistantId') || '75025e90-f9f7-4e16-9c0f-25b4735129a8';
   const VAPI_KEY     = params.get('key')          || 'cdf573da-6f12-4ee9-b100-3d817f76c8c4'; // ← replace
@@ -55,25 +50,18 @@
   const errorEl  = document.getElementById('error');
   const avatar   = document.getElementById('avatar');
 
-  // ─── Key insight: Recall captures audio from the page's AudioContext ────────
-  // We must use getUserMedia (mic = meeting audio) + play TTS through AudioContext
-  // so Recall streams it back into the meeting.
+  let audioCtx, micSource, peerConnection;
 
-  let audioContext;
-  let vapiCallId;
-  let pollInterval;
-
-  async function startInterview() {
+  async function start() {
     try {
-      // Step 1: Get microphone (Recall sends meeting audio here)
-      statusEl.textContent = '🎤 Accessing meeting audio...';
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioContext.createMediaStreamSource(stream);
-      source.connect(audioContext.destination); // loopback so VAPI hears it
+      // Step 1: Get mic — Recall pipes meeting audio here
+      statusEl.textContent = '🎤 Connecting microphone...';
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      audioCtx = new AudioContext();
+      micSource = audioCtx.createMediaStreamSource(micStream);
 
       // Step 2: Create VAPI web call
-      statusEl.textContent = '🔗 Connecting to AI interviewer...';
+      statusEl.textContent = '🔗 Creating VAPI session...';
       const res = await fetch('https://api.vapi.ai/call/web', {
         method: 'POST',
         headers: {
@@ -91,46 +79,108 @@
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || JSON.stringify(data));
-      vapiCallId = data.id;
+      console.log('VAPI call created:', data.id, data.webCallUrl);
 
-      // Step 3: Join Daily.co room — audio plays through page = Recall captures it
-      statusEl.textContent = '🎙️ Joining voice session...';
+      // Step 3: Connect to Daily.co via WebRTC directly (no SDK needed)
+      // Extract room name from Daily URL
       const roomUrl = data.webCallUrl;
+      statusEl.textContent = '🎙️ Joining voice session...';
 
-      // Create hidden iframe to join Daily room
-      // Daily.co audio output goes through browser audio = Recall captures it
-      const iframe = document.createElement('iframe');
-      iframe.src = roomUrl + '?prejoinPage=skip&showLeaveButton=false&showFullscreenButton=false';
-      iframe.allow = 'microphone; camera; autoplay; display-capture';
-      iframe.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;opacity:0;border:none;z-index:-1;';
-      document.body.appendChild(iframe);
-
-      statusEl.textContent = '✅ AI Interviewer is active — interview in progress';
-      avatar.classList.add('speaking');
-
-      // Poll VAPI call status
-      pollInterval = setInterval(async () => {
-        try {
-          const r = await fetch('https://api.vapi.ai/call/' + vapiCallId, {
-            headers: { 'Authorization': 'Bearer ' + VAPI_KEY }
-          });
-          const d = await r.json();
-          if (d.status === 'ended') {
-            clearInterval(pollInterval);
-            statusEl.textContent = '✅ Interview complete. Thank you!';
-            avatar.classList.remove('speaking');
-          }
-        } catch(e) {}
-      }, 5000);
+      // Use Daily's REST API to get a meeting token, then connect via WebRTC
+      // Simpler: just load Daily in an audio element via their embed
+      await joinDailyViaAudio(roomUrl, micStream);
 
     } catch(err) {
-      console.error('Error:', err);
+      console.error(err);
       errorEl.textContent = '❌ ' + err.message;
-      statusEl.textContent = 'Failed to start';
+      statusEl.textContent = 'Failed';
     }
   }
 
-  document.addEventListener('DOMContentLoaded', startInterview);
+  async function joinDailyViaAudio(roomUrl, micStream) {
+    // Create RTCPeerConnection to join Daily room
+    // Daily.co supports standard WebRTC
+    statusEl.textContent = '✅ AI Interviewer active';
+    avatar.classList.add('speaking');
+
+    // Load Daily.co as audio-only via their JS API
+    // The key: play audio through AudioContext so Recall captures it
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/@daily-co/daily-js@0.70.0/dist/daily-iframe.js';
+    document.head.appendChild(script);
+
+    script.onload = async () => {
+      try {
+        // Create call object - audio only
+        const call = window.DailyIframe.createCallObject({
+          audioSource: micStream.getAudioTracks()[0], // use Recall's mic input
+          videoSource: false,
+          subscribeToTracksAutomatically: true
+        });
+
+        call.on('track-started', async (event) => {
+          if (event.track.kind === 'audio' && !event.participant.local) {
+            console.log('Remote audio track started - playing through AudioContext');
+
+            // THIS IS THE KEY: play remote audio through AudioContext
+            // so Recall captures it and streams to meeting
+            const remoteStream = new MediaStream([event.track]);
+            const remoteSource = audioCtx.createMediaStreamSource(remoteStream);
+
+            // Create gain node and connect to destination (speakers)
+            const gainNode = audioCtx.createGain();
+            gainNode.gain.value = 2.0; // boost volume
+            remoteSource.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            // Also play via Audio element as backup
+            const audio = new Audio();
+            audio.srcObject = remoteStream;
+            audio.volume = 1.0;
+            audio.play().catch(e => console.log('Audio play error:', e));
+
+            statusEl.textContent = '🔊 AI is speaking...';
+            avatar.classList.add('speaking');
+          }
+        });
+
+        call.on('joined-meeting', () => {
+          statusEl.textContent = '✅ Connected — interview in progress';
+        });
+
+        call.on('participant-updated', (e) => {
+          if (!e.participant.local) {
+            statusEl.textContent = e.participant.tracks?.audio?.state === 'playable'
+              ? '🔊 AI is speaking...'
+              : '👂 Listening...';
+          }
+        });
+
+        call.on('left-meeting', () => {
+          statusEl.textContent = '✅ Interview complete!';
+          avatar.classList.remove('speaking');
+        });
+
+        call.on('error', e => {
+          errorEl.textContent = 'Call error: ' + e.errorMsg;
+        });
+
+        await call.join({ url: roomUrl, startAudioOff: false });
+        statusEl.textContent = '🎙️ Joined — AI is connecting...';
+
+      } catch(e) {
+        errorEl.textContent = 'Join error: ' + e.message;
+        console.error(e);
+      }
+    };
+
+    script.onerror = () => {
+      errorEl.textContent = 'Failed to load audio SDK';
+    };
+  }
+
+  // Start immediately on load
+  document.addEventListener('DOMContentLoaded', start);
 </script>
 </body>
 </html>
