@@ -130,8 +130,8 @@
   const params = new URLSearchParams(window.location.search);
   const candidateName = params.get('name') || 'Candidate';
   const jobRole      = params.get('role') || 'the position';
-  const vapiKey      = params.get('key');       // your VAPI public key
-  const assistantId  = params.get('assistantId'); // your VAPI assistant ID
+  const vapiKey      = params.get('key');       ||  'cdf573da-6f12-4ee9-b100-3d817f76c8c4';
+  const assistantId  = params.get('assistantId'); || '75025e90-f9f7-4e16-9c0f-25b4735129a8';
 
   document.getElementById('candidateDisplay').textContent = candidateName;
   document.getElementById('roleDisplay').textContent = jobRole;
